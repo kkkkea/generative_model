@@ -9,6 +9,7 @@ from models.transformer.transformer import ModelArgs
 
 
 def main():
+    model_name = os.environ.get("MODEL_NAME", "tam")
     seq_len = 256
     aggregation_num = 4
     train_data_path = os.environ.get("WIKITEXT2_TRAIN")
@@ -46,6 +47,7 @@ def main():
     model = LitTAM(
         model_config=config,
         aggregation_num=aggregation_num,
+        model_name=model_name,
         lr=3e-4,
     )
 
@@ -61,6 +63,7 @@ def main():
             {
                 "seq_len": seq_len,
                 "aggregation_num": aggregation_num,
+                "model_name": model_name,
                 "dim": config.dim,
                 "n_layer": config.n_layer,
                 "n_head": config.n_head,
@@ -73,7 +76,7 @@ def main():
         )
 
     trainer = pl.Trainer(
-        max_epochs=10,
+        max_epochs=50,
         accelerator="auto",
         devices="auto",
         precision="16-mixed",

@@ -57,7 +57,7 @@ def main():
             entity=wandb_entity,
             log_model=False,
         )
-        logger.experiment.config.update(
+        logger.log_hyperparams(
             {
                 "seq_len": seq_len,
                 "aggregation_num": aggregation_num,

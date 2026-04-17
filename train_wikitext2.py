@@ -1,4 +1,5 @@
 import lightning.pytorch as pl
+import os
 
 from dataset.wikitext2 import WikiText2Dataset
 from models.lightning.lightning_data import DataModule
@@ -9,9 +10,15 @@ from models.transformer.transformer import ModelArgs
 def main():
     seq_len = 256
     aggregation_num = 4
+    train_data_path = os.environ.get("WIKITEXT2_TRAIN")
+    val_data_path = os.environ.get("WIKITEXT2_VALIDATION")
 
-    train_dataset = WikiText2Dataset(split="train", seq_len=seq_len)
-    val_dataset = WikiText2Dataset(split="validation", seq_len=seq_len)
+    train_dataset = WikiText2Dataset(
+        split="train", seq_len=seq_len, data_path=train_data_path
+    )
+    val_dataset = WikiText2Dataset(
+        split="validation", seq_len=seq_len, data_path=val_data_path
+    )
 
     data_module = DataModule(
         train_dataset=train_dataset,

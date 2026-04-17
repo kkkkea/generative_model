@@ -2,6 +2,7 @@ import lightning.pytorch as pl
 import os
 
 from dataset.wikitext2 import WikiText2Dataset
+from lightning.pytorch.loggers import WandbLogger
 from models.lightning.lightning_data import DataModule
 from models.lightning.lightning_model import LitTAM
 from models.transformer.transformer import ModelArgs
@@ -12,6 +13,9 @@ def main():
     aggregation_num = 4
     train_data_path = os.environ.get("WIKITEXT2_TRAIN")
     val_data_path = os.environ.get("WIKITEXT2_VALIDATION")
+    wandb_project = os.environ.get("WANDB_PROJECT", "tma-ar-test")
+    wandb_name = os.environ.get("WANDB_NAME", "tam-wikitext2-bs64")
+    wandb_entity = os.environ.get("WANDB_ENTITY")
 
     train_dataset = WikiText2Dataset(
         split="train", seq_len=seq_len, data_path=train_data_path
@@ -45,12 +49,36 @@ def main():
         lr=3e-4,
     )
 
+    logger = None
+    if wandb_project:
+        logger = WandbLogger(
+            project=wandb_project,
+            name=wandb_name,
+            entity=wandb_entity,
+            log_model=False,
+        )
+        logger.experiment.config.update(
+            {
+                "seq_len": seq_len,
+                "aggregation_num": aggregation_num,
+                "dim": config.dim,
+                "n_layer": config.n_layer,
+                "n_head": config.n_head,
+                "vocab_size": config.vocab_size,
+                "lr": model.lr,
+                "weight_decay": model.weight_decay,
+                "train_batch_size": data_module.train_batch_size,
+                "eval_batch_size": data_module.eval_batch_size,
+            }
+        )
+
     trainer = pl.Trainer(
         max_epochs=10,
         accelerator="auto",
         devices="auto",
         precision="16-mixed",
         log_every_n_steps=20,
+        logger=logger,
     )
     trainer.fit(model, datamodule=data_module)
 

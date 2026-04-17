@@ -26,14 +26,23 @@ class LitTAM(pl.LightningModule):
     def training_step(self, batch, batch_idx):
         x, _, _ = batch
         loss = self.model(x)
-        self.log("train_loss", loss, prog_bar=True, on_step=True, on_epoch=True)
+        self.log(
+            "train_loss",
+            loss,
+            prog_bar=True,
+            on_step=True,
+            on_epoch=True,
+            sync_dist=True,
+        )
         return loss
 
     def validation_step(self, batch, batch_idx):
         x, _, _ = batch
         loss = self.model(x)
         self.log("val_loss", loss, prog_bar=True, on_epoch=True, sync_dist=True)
-        self.log("val_ppl", torch.exp(loss), prog_bar=True, on_epoch=True, sync_dist=True)
+        self.log(
+            "val_ppl", torch.exp(loss), prog_bar=True, on_epoch=True, sync_dist=True
+        )
 
     def configure_optimizers(self):
         return torch.optim.AdamW(

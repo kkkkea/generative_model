@@ -43,6 +43,7 @@ class GaussianAEModel(pl.LightningModule):
         profiling_warmup_steps: int = 5,
         enable_log_images: bool = True,
         num_val_log_images: int = 4,
+        enable_compile: bool = False,
     ):
         super().__init__()
         self.vision_encoder = vision_encoder
@@ -63,6 +64,7 @@ class GaussianAEModel(pl.LightningModule):
 
         self.enable_log_images = enable_log_images
         self.num_val_log_images = num_val_log_images
+        self.enable_compile = enable_compile
 
         proc = AutoImageProcessor.from_pretrained(encoder_config_path)
         self.encoder_mean = torch.tensor(proc.image_mean).view(1, 3, 1, 1)
@@ -74,8 +76,9 @@ class GaussianAEModel(pl.LightningModule):
         no_grad(self.ema_ae)
         no_grad(self.vision_encoder)
 
-        self.ae.compile()
-        self.ema_ae.compile()
+        if self.enable_compile:
+            self.ae.compile()
+            self.ema_ae.compile()
 
     def configure_callbacks(self) -> Union[Sequence[Callback], Callback]:
         return [self.ema_tracker] if self.ema_tracker is not None else []
@@ -190,9 +193,31 @@ class GaussianAEModel(pl.LightningModule):
 
     def validation_step(self, batch, batch_idx):
         recon_imgs, gt_imgs = self.predict_step(batch, batch_idx)
-        vis_imgs = torch.cat([gt_imgs, recon_imgs], dim=-1)
+        if (
+                self.enable_log_images
+                and batch_idx == 0
+                and self.trainer.is_global_zero
+            ):
+                num_imgs = min(self.num_val_log_images, gt_imgs.shape[0])
 
-        return vis_imgs
+                vis = torch.stack(
+                    [
+                        img
+                        for pair in zip(gt_imgs[:num_imgs], recon_imgs[:num_imgs])
+                        for img in pair
+                    ],
+                    dim=0,
+                )
+                grid = make_grid(vis, nrow=2)
+
+                self.logger.experiment.log(
+                    {
+                        "val/reconstructions": wandb.Image(
+                            grid.permute(1, 2, 0).detach().cpu().numpy()
+                        ),
+                        "global_step": self.global_step,
+                    }
+                )
 
     def state_dict(self, *args, destination=None, prefix="", keep_vars=False):
         if destination is None:

@@ -1,8 +1,9 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from importlib import import_module
 
-from transformer.transformer import (
+from models.transformer.transformer import (
     TransformerArgs,
     Decoder_Decoder,
     precompute_freqs_cis_2d,
@@ -10,11 +11,17 @@ from transformer.transformer import (
 from time import perf_counter
 from einops import rearrange
 from fused_ssim import fused_ssim
-from gs_plat import (
-    project_gaussians_2d_scale_rot,
-    rasterize_gaussians_no_tiles,
-    rasterize_gaussians_sum,
-)
+
+try:
+    # Installed package exposes the module name `gsplat`.
+    _gsplat_mod = import_module("gsplat")
+except ImportError:
+    # Fallback for local source layout: <repo>/gs_plat/gsplat
+    _gsplat_mod = import_module("gs_plat.gsplat")
+
+project_gaussians_2d_scale_rot = _gsplat_mod.project_gaussians_2d_scale_rot
+rasterize_gaussians_no_tiles = _gsplat_mod.rasterize_gaussians_no_tiles
+rasterize_gaussians_sum = _gsplat_mod.rasterize_gaussians_sum
 
 
 class GaussianAutoEncoder(nn.Module):
@@ -125,6 +132,22 @@ class GaussianAutoEncoder(nn.Module):
         feat: torch.Tensor,
         upsample_ratio=None,
     ):
+        assert xy.ndim == 2 and xy.shape[1] == 2
+        assert inverse_scale.ndim == 2 and inverse_scale.shape[1] == 2
+        assert rot.ndim == 2 and rot.shape[1] == 1
+        assert feat.ndim == 2 and feat.shape[1] == 3
+
+        assert torch.isfinite(xy).all()
+        assert torch.isfinite(inverse_scale).all()
+        assert torch.isfinite(rot).all()
+        assert torch.isfinite(feat).all()
+
+        # gsplat custom CUDA kernels expect fp32 inputs under current build.
+        xy = xy.float()
+        inverse_scale = inverse_scale.float()
+        rot = rot.float()
+        feat = feat.float()
+
         scale = self._get_scale(inverse_scale, upsample_ratio)
 
         tmp = project_gaussians_2d_scale_rot(xy, scale, rot, img_h, img_w, tile_bounds)
@@ -211,7 +234,7 @@ class GaussianAutoEncoder(nn.Module):
         )
 
         gaussian_features = self.decoder_decoder(
-            img_features, queries, freq_cis=freq_cis
+            img_features, queries, freqs_cis=freq_cis
         )
         gaussian_features = self.gaussian_proj(self.gaussian_norm(gaussian_features))
 
@@ -222,10 +245,12 @@ class GaussianAutoEncoder(nn.Module):
             c=self.gaussian_channels,
         )
 
-        xy = self.xy_proj(gaussian_features)
-        inverse_scale = self.inverse_scale_proj(gaussian_features)
-        rot = self.rot_proj(gaussian_features)
-        feat = self.feat_proj(gaussian_features)
+        xy = torch.sigmoid(self.xy_proj(gaussian_features)) * self.img_size
+
+        inverse_scale = F.softplus(self.inverse_scale_proj(gaussian_features)) + 1e-4
+
+        rot = torch.tanh(self.rot_proj(gaussian_features)) * 3.1415926
+        feat = torch.sigmoid(self.feat_proj(gaussian_features))
 
         recon_imgs = self.render(xy=xy, inverse_scale=inverse_scale, rot=rot, feat=feat)
 

@@ -13,15 +13,17 @@ def mirco_batch_collate_fn(batch):
     for micro_batch in batch:
         new_batch.extend(micro_batch)
     x, y, metadata = list(zip(*new_batch))
-    stacked_metadata = {}
-    for key in metadata[0].keys():
-        try:
-            if isinstance(metadata[0][key], torch.Tensor):
-                stacked_metadata[key] = torch.stack([m[key] for m in metadata], dim=0)
-            else:
-                stacked_metadata[key] = [m[key] for m in metadata]
-        except:
-            pass
+    stacked_metadata = None
+    if len(metadata) > 0 and metadata[0] is not None:
+        stacked_metadata = {}
+        for key in metadata[0].keys():
+            try:
+                if isinstance(metadata[0][key], torch.Tensor):
+                    stacked_metadata[key] = torch.stack([m[key] for m in metadata], dim=0)
+                else:
+                    stacked_metadata[key] = [m[key] for m in metadata]
+            except Exception:
+                pass
     x = torch.stack(x, dim=0)
     return x, y, stacked_metadata
 
@@ -29,15 +31,17 @@ def mirco_batch_collate_fn(batch):
 def collate_fn(batch):
     batch = copy.deepcopy(batch)
     x, y, metadata = list(zip(*batch))
-    stacked_metadata = {}
-    for key in metadata[0].keys():
-        try:
-            if isinstance(metadata[0][key], torch.Tensor):
-                stacked_metadata[key] = torch.stack([m[key] for m in metadata], dim=0)
-            else:
-                stacked_metadata[key] = [m[key] for m in metadata]
-        except:
-            pass
+    stacked_metadata = None
+    if len(metadata) > 0 and metadata[0] is not None:
+        stacked_metadata = {}
+        for key in metadata[0].keys():
+            try:
+                if isinstance(metadata[0][key], torch.Tensor):
+                    stacked_metadata[key] = torch.stack([m[key] for m in metadata], dim=0)
+                else:
+                    stacked_metadata[key] = [m[key] for m in metadata]
+            except Exception:
+                pass
     x = torch.stack(x, dim=0)
     return x, y, stacked_metadata
 

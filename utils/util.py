@@ -135,7 +135,30 @@ class SaveImagesHook(Callback):
 
     def save_image(self, trainer, pl_module, images, metadatas):
         images = images.permute(0, 2, 3, 1).cpu().numpy()
+        if metadatas is None:
+            return
+
+        # Support both per-sample metadata sequences and stacked metadata dicts.
+        if isinstance(metadatas, dict):
+            normalized_metadatas = []
+            for i in range(images.shape[0]):
+                item = {}
+                for key, value in metadatas.items():
+                    if isinstance(value, (list, tuple)):
+                        if i < len(value):
+                            item[key] = value[i]
+                    elif torch.is_tensor(value):
+                        if value.ndim > 0 and i < value.shape[0]:
+                            item[key] = value[i]
+                    else:
+                        item[key] = value
+                normalized_metadatas.append(item)
+            metadatas = normalized_metadatas
+
         for sample, metadata in zip(images, metadatas):
+            if not isinstance(metadata, dict):
+                continue
+            metadata = dict(metadata)
             save_fn = metadata.pop("save_fn", None)
             if save_fn:
                 self.executor_pool.submit(save_fn, sample, metadata, self.target_dir)

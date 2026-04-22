@@ -80,8 +80,8 @@ class _RasterizeGaussiansSum(Function):
             out_img = (
                 torch.zeros(img_height, img_width, colors.shape[-1], device=xys.device)
             )
-            gaussian_ids_sorted = torch.zeros(0, 1, device=xys.device)
-            tile_bins =           torch.zeros(0, 2, device=xys.device)
+            gaussian_ids_sorted = torch.zeros(0, 1, device=xys.device, dtype=torch.int32)
+            tile_bins =           torch.zeros(0, 2, device=xys.device, dtype=torch.int32)
         else:
             (
                 isect_ids_unsorted,

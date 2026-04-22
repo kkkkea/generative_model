@@ -16,7 +16,7 @@ def find_multiple(n: int, k: int):
 
 # https://github.com/pytorch-labs/gpt-fast/blob/main/model.py
 def precompute_freqs_cis(
-    seq_len: int, n_elem: int, base: int = 10000, cls_token_num=120
+    seq_len: int, n_elem: int, base: int = 10000, cls_token_num: int = None
 ):
     freqs = 1.0 / (
         base ** (torch.arange(0, n_elem, 2)[: (n_elem // 2)].float() / n_elem)
@@ -26,15 +26,17 @@ def precompute_freqs_cis(
     freqs_cis = torch.polar(torch.ones_like(freqs), freqs)
     cache = torch.stack(
         [freqs_cis.real, freqs_cis.imag], dim=-1
-    )  # (cls_token_num+seq_len, head_dim // 2, 2)
-    cond_cache = torch.cat(
-        [torch.zeros(cls_token_num, n_elem // 2, 2), cache]
-    )  # (cls_token_num+seq_len, head_dim // 2, 2)
-    return cond_cache
+    )  # (seq_len, head_dim // 2, 2)
+
+    if cls_token_num is not None:
+        cache = torch.cat(
+            [torch.zeros(cls_token_num, n_elem // 2, 2), cache]
+        )  # (cls_token_num+seq_len, head_dim // 2, 2)
+    return cache
 
 
 def precompute_freqs_cis_2d(
-    grid_size: int, n_elem: int, base: int = 10000, cls_token_num=120
+    grid_size: int, n_elem: int, base: int = 10000, cls_token_num: int = None
 ):
     # split the dimension into half, one for x and one for y
     half_dim = n_elem // 2
@@ -54,10 +56,12 @@ def precompute_freqs_cis_2d(
         [torch.cos(freqs_grid), torch.sin(freqs_grid)], dim=-1
     )  # (grid_size, grid_size, head_dim // 2, 2)
     cache = cache_grid.flatten(0, 1)
-    cond_cache = torch.cat(
-        [torch.zeros(cls_token_num, n_elem // 2, 2), cache]
-    )  # (cls_token_num+grid_size**2, head_dim // 2, 2)
-    return cond_cache
+
+    if cls_token_num is not None:
+        cache = torch.cat(
+            [torch.zeros(cls_token_num, n_elem // 2, 2), cache]
+        )  # (cls_token_num+grid_size**2, head_dim // 2, 2)
+    return cache
 
 
 def apply_rotary_emb(x: torch.Tensor, freqs_cis: torch.Tensor):
@@ -80,7 +84,7 @@ def apply_rotary_emb(x: torch.Tensor, freqs_cis: torch.Tensor):
     return x_out2.type_as(x)
 
 
-class ModelArgs(PreTrainedConfig):
+class TransformerArgs(PreTrainedConfig):
     def __init__(
         self,
         dim: int = 4096,
@@ -96,13 +100,6 @@ class ModelArgs(PreTrainedConfig):
         resid_dropout_p: float = 0.1,
         ffn_dropout_p: float = 0.1,
         drop_path_rate: float = 0.0,
-        num_classes: int = 1000,
-        class_dropout_prob: float = 0.1,
-        model_type: str = "c2i",
-        vocab_size: int = 16384,
-        cls_token_num: int = 1,
-        block_size: int = 256,
-        seq_len: int = 256,
     ):
         self.dim = dim
         self.n_layer = n_layer
@@ -119,18 +116,9 @@ class ModelArgs(PreTrainedConfig):
         self.ffn_dropout_p = ffn_dropout_p
         self.drop_path_rate = drop_path_rate
 
-        self.num_classes = num_classes
-        self.class_dropout_prob = class_dropout_prob
-        self.model_type = model_type
-        self.vocab_size = vocab_size
-        self.cls_token_num = cls_token_num
-        self.block_size = block_size
-
-        self.seq_len = seq_len
-
 
 class FeedForward(nn.Module):
-    def __init__(self, config: ModelArgs):
+    def __init__(self, config: TransformerArgs):
         super().__init__()
         hidden_dim = 4 * config.dim
         hidden_dim = int(2 * hidden_dim / 3)
@@ -149,7 +137,7 @@ class FeedForward(nn.Module):
 
 
 class Attention(nn.Module):
-    def __init__(self, config: ModelArgs):
+    def __init__(self, config: TransformerArgs):
         super().__init__()
         assert config.dim % config.n_head == 0
         self.dim = config.dim
@@ -215,7 +203,7 @@ class Attention(nn.Module):
 
 
 class CrossAttention(nn.Module):
-    def __init__(self, config: ModelArgs):
+    def __init__(self, config: TransformerArgs):
         super().__init__()
         assert config.dim % config.n_head == 0
         self.dim = config.dim
@@ -282,7 +270,7 @@ class CrossAttention(nn.Module):
 
 
 class SelfDecoder(nn.Module):
-    def __init__(self, config: ModelArgs):
+    def __init__(self, config: TransformerArgs):
         super().__init__()
         self.attn = Attention(config)
         self.ffn = FeedForward(config)
@@ -301,7 +289,7 @@ class SelfDecoder(nn.Module):
 
 
 class CrossDecoder(nn.Module):
-    def __init__(self, config: ModelArgs):
+    def __init__(self, config: TransformerArgs):
         super().__init__()
         self.attn = CrossAttention(config)
         self.ffn = FeedForward(config)
@@ -323,9 +311,10 @@ class CrossDecoder(nn.Module):
 
 
 class Decoder_Decoder(nn.Module):
-    def __init__(self, config: ModelArgs, n_layer):
+    def __init__(self, config: TransformerArgs):
         super().__init__()
         self.config = config
+        n_layer = config.n_layer
         self.self_dec = nn.ModuleList(
             [SelfDecoder(config) for _ in range(n_layer // 2)]
         )

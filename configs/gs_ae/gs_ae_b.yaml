@@ -1,0 +1,94 @@
+seed_everything: true
+per_run_seed: true
+tags:
+  exp: &exp gaussian_encoder_b
+torch_hub_dir: null
+huggingface_cache_dir: null
+auto_resume: true
+trainer:
+  default_root_dir: /free/data/gsae/train_logs/
+  accelerator: gpu
+  strategy: ddp
+  devices: auto
+  num_nodes: 1
+  precision: bf16-mixed
+  gradient_clip_val: 1.0
+  gradient_clip_algorithm: norm
+  logger:
+      class_path: lightning.pytorch.loggers.WandbLogger
+      init_args:
+        project: gaussian_encoder
+        name: *exp
+  num_sanity_val_steps: 0
+  max_steps: 600000
+  val_check_interval: 50
+  check_val_every_n_epoch: null
+  log_every_n_steps: 50
+  deterministic: null
+  inference_mode: true
+  use_distributed_sampler: false
+  callbacks:
+    - class_path: utils.util.CheckpointHook
+      init_args:
+        every_n_train_steps: 500
+        save_top_k: -1
+        save_last: true
+    - class_path: utils.util.SaveImagesHook
+      init_args:
+         save_dir: val_b
+         save_compressed: true
+model:
+  vision_encoder:
+    class_path: models.encoder.dinov2.Dinov2withNorm
+    init_args:
+      dinov2_path: facebook/dinov2-with-registers-base
+  ae:
+    class_path: models.gaussian_ae.gs_encoder.GaussianAutoEncoder
+    init_args:
+      transformer_config:
+        class_path: models.transformer.transformer.TransformerArgs
+        init_args:
+          dim: 768
+          n_layer: 12
+          n_head: 12
+      img_size: 224
+      patch_size: 14
+      in_channels: 3
+      gaussian_channels: 48
+      num_gaussian_per_patch: 64
+      l1_loss_ratio: 1.0
+      ssim_loss_ratio: 0.1
+    ema_tracker:
+      class_path: utils.util.SimpleEMA
+      init_args:
+        decay: 0.9999
+    optimizer:
+      class_path: torch.optim.AdamW
+      init_args:
+        lr: 1e-4
+        weight_decay: 0.0
+    enable_profiling: true
+    profiling_print_freq: 1000
+    profiling_warmup_steps: 100
+    override_lr_on_resume: null
+    override_ema_decay_on_resume: null
+data:
+  train_dataset:
+    class_path: dataset.div2k.DIV2KDataset
+    init_args:
+      root: /free/data/dataset/div2k
+      split: train
+  eval_dataset:
+    class_path: dataset.div2k.DIV2KDataset
+    init_args:
+      root: /free/data/dataset/div2k
+      split: valid
+  pred_dataset:
+    class_path: dataset.div2k.DIV2KDataset
+    init_args:
+      root: /free/data/dataset/div2k
+      split: valid
+  train_batch_size: 64
+  train_num_workers: 4
+  pred_batch_size: 32
+  pred_num_workers: 1

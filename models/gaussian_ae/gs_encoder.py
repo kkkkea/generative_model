@@ -20,7 +20,6 @@ from gs_plat import (
 class GaussianAutoEncoder(nn.Module):
     def __init__(
         self,
-        vision_encoder: nn.Module,
         transformer_config: TransformerArgs,
         img_size: int = 224,
         patch_size: int = 14,
@@ -47,15 +46,9 @@ class GaussianAutoEncoder(nn.Module):
             1,
         )
 
-        self.vision_encoder = vision_encoder
-
-        assert (
-            vision_encoder.hidden_size == transformer_config.dim
-        ), "hidden state dim must same"
-
         self.grid_size = img_size // patch_size
         img_seq_len = self.grid_size**2
-        gaussian_dim = vision_encoder.hidden_size
+        gaussian_dim = transformer_config.dim
         self.gaussian_embedding = nn.Parameter(torch.zeros(img_seq_len, gaussian_dim))
 
         self.decoder_decoder = Decoder_Decoder(config=transformer_config)
@@ -107,9 +100,11 @@ class GaussianAutoEncoder(nn.Module):
     def calc_loss(self, imgs: torch.Tensor, gt_imgs: torch.Tensor):
         # img shape (B, C, H, W)
 
-        return self.l1_loss_ratio * F.l1_loss(imgs, gt_imgs) + self.ssim_loss_ratio * (
-            1 - fused_ssim(imgs, gt_imgs)
-        )
+        l1_loss = F.l1_loss(imgs, gt_imgs)
+        ssim_loss = 1 - fused_ssim(imgs, gt_imgs)
+        loss = self.l1_loss_ratio * l1_loss + self.ssim_loss_ratio * ssim_loss
+
+        return {"l1_loss": l1_loss, "ssim_loss": ssim_loss, "loss": loss}
 
     def _get_scale(self, scale: torch.Tensor, upsample_ratio: float = None):
         scale = 1 / scale
@@ -208,9 +203,7 @@ class GaussianAutoEncoder(nn.Module):
 
         return torch.cat(out_imgs, dim=0)
 
-    def forward(self, pixels: torch.Tensor):
-        img_features = self.vision_encoder(pixels)
-
+    def forward_shared(self, img_features: torch.Tensor):
         b, seq_len, h = img_features.shape
         freq_cis = self.freq_cis.unsqueeze(0).repeat(b, 1, 1, 1).to(img_features.device)
         queries = (
@@ -236,24 +229,27 @@ class GaussianAutoEncoder(nn.Module):
 
         recon_imgs = self.render(xy=xy, inverse_scale=inverse_scale, rot=rot, feat=feat)
 
+        return recon_imgs
+
+    def forward(self, pixels: torch.Tensor, img_features: torch.Tensor):
+        recon_imgs = self.forward_shared(img_features=img_features)
+
         loss = self.calc_loss(imgs=recon_imgs, gt_imgs=pixels)
 
         return loss
 
 
 def GaussianAE_B(
-    vision_encoder: nn.Module,
     img_size: int = 224,
     patch_size: int = 14,
     in_channels: int = 3,
-    gaussian_channels: int = 60,
-    num_gaussian_per_patch: int = 96,
+    gaussian_channels: int = 48,
+    num_gaussian_per_patch: int = 64,
     l1_loss_ratio: float = 1.0,
     ssim_loss_ratio: float = 0.1,
     **kwargs,
 ):
     return GaussianAutoEncoder(
-        vision_encoder=vision_encoder,
         img_size=img_size,
         patch_size=patch_size,
         in_channels=in_channels,

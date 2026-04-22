@@ -1,27 +1,15 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from importlib import import_module
 
 from models.transformer.transformer import (
     TransformerArgs,
     Decoder_Decoder,
     precompute_freqs_cis_2d,
 )
-from time import perf_counter
 from einops import rearrange
 from fused_ssim import fused_ssim
-
-try:
-    # Installed package exposes the module name `gsplat`.
-    _gsplat_mod = import_module("gsplat")
-except ImportError:
-    # Fallback for local source layout: <repo>/gs_plat/gsplat
-    _gsplat_mod = import_module("gs_plat.gsplat")
-
-project_gaussians_2d_scale_rot = _gsplat_mod.project_gaussians_2d_scale_rot
-rasterize_gaussians_no_tiles = _gsplat_mod.rasterize_gaussians_no_tiles
-rasterize_gaussians_sum = _gsplat_mod.rasterize_gaussians_sum
+from utils.gaussian_splatting import generate_2D_gaussian_splatting_step
 
 
 class GaussianAutoEncoder(nn.Module):
@@ -73,7 +61,7 @@ class GaussianAutoEncoder(nn.Module):
             nn.Linear(self.gaussian_channels * 4, 2),
         )
 
-        self.inverse_scale_proj = nn.Sequential(
+        self.sigma_proj = nn.Sequential(
             nn.Linear(self.gaussian_channels, self.gaussian_channels),
             nn.ReLU(),
             nn.Linear(self.gaussian_channels, self.gaussian_channels * 4),
@@ -81,7 +69,7 @@ class GaussianAutoEncoder(nn.Module):
             nn.Linear(self.gaussian_channels * 4, 2),
         )
 
-        self.rot_proj = nn.Sequential(
+        self.rho_proj = nn.Sequential(
             nn.Linear(self.gaussian_channels, self.gaussian_channels),
             nn.ReLU(),
             nn.Linear(self.gaussian_channels, self.gaussian_channels * 4),
@@ -89,7 +77,14 @@ class GaussianAutoEncoder(nn.Module):
             nn.Linear(self.gaussian_channels * 4, 1),
         )
 
-        # RGB value
+        self.alpha_proj = nn.Sequential(
+            nn.Linear(self.gaussian_channels, self.gaussian_channels),
+            nn.ReLU(),
+            nn.Linear(self.gaussian_channels, self.gaussian_channels * 4),
+            nn.ReLU(),
+            nn.Linear(self.gaussian_channels * 4, 1),
+        )
+
         self.feat_proj = nn.Sequential(
             nn.Linear(self.gaussian_channels, self.gaussian_channels),
             nn.ReLU(),
@@ -113,114 +108,35 @@ class GaussianAutoEncoder(nn.Module):
 
         return {"l1_loss": l1_loss, "ssim_loss": ssim_loss, "loss": loss}
 
-    def _get_scale(self, scale: torch.Tensor, upsample_ratio: float = None):
-        scale = 1 / scale
-
-        if upsample_ratio is not None:
-            scale = upsample_ratio * scale
-
-        return scale
-
-    def render_inner(
-        self,
-        img_h,
-        img_w,
-        tile_bounds,
-        xy: torch.Tensor,
-        inverse_scale: torch.Tensor,
-        rot: torch.Tensor,
-        feat: torch.Tensor,
-        upsample_ratio=None,
-    ):
-        assert xy.ndim == 2 and xy.shape[1] == 2
-        assert inverse_scale.ndim == 2 and inverse_scale.shape[1] == 2
-        assert rot.ndim == 2 and rot.shape[1] == 1
-        assert feat.ndim == 2 and feat.shape[1] == 3
-
-        assert torch.isfinite(xy).all()
-        assert torch.isfinite(inverse_scale).all()
-        assert torch.isfinite(rot).all()
-        assert torch.isfinite(feat).all()
-
-        # gsplat custom CUDA kernels expect fp32 inputs under current build.
-        xy = xy.float()
-        inverse_scale = inverse_scale.float()
-        rot = rot.float()
-        feat = feat.float()
-
-        scale = self._get_scale(inverse_scale, upsample_ratio)
-
-        tmp = project_gaussians_2d_scale_rot(xy, scale, rot, img_h, img_w, tile_bounds)
-        xy, radii, conics, num_tiles_hit = tmp
-
-        # enable tiles
-        enable_topk_norm = True
-        tmp = (
-            xy,
-            radii,
-            conics,
-            num_tiles_hit,
-            feat,
-            img_h,
-            img_w,
-            self.block_h,
-            self.block_w,
-            enable_topk_norm,
-        )
-        out_image = rasterize_gaussians_sum(*tmp)
-
-        out_image = (
-            out_image.view(-1, img_h, img_w, self.in_channels)
-            .permute(0, 3, 1, 2)
-            .contiguous()
-        )
-
-        return out_image
-
-    def render(
-        self,
-        xy: torch.Tensor,
-        inverse_scale: torch.Tensor,
-        rot: torch.Tensor,
-        feat: torch.Tensor,
-        render_size: int = None,
-    ):
+    def render(self, gs_parameters: torch.Tensor, render_size: int = None):
         img_h, img_w = self.img_size, self.img_size
 
         if render_size is not None:
             img_h, img_w = render_size, render_size
 
-        tile_bounds = (
-            (img_w + self.block_w - 1) // self.block_w,
-            (img_h + self.block_h - 1) // self.block_h,
-            1,
-        )
-        upsample_ratio = float(img_h) / self.img_size
+        assert img_h == img_w, "Current gaussian renderer expects square outputs."
+        render_scale = float(img_h) / self.img_size
 
-        if xy.ndim == 2:
-            return self.render_inner(
-                img_h=img_h,
-                img_w=img_w,
-                tile_bounds=tile_bounds,
-                xy=xy,
-                inverse_scale=inverse_scale,
-                rot=rot,
-                feat=feat,
-                upsample_ratio=upsample_ratio,
+        if gs_parameters.ndim == 2:
+            return generate_2D_gaussian_splatting_step(
+                sr_size=(img_h, img_w),
+                gs_parameters=gs_parameters.float(),
+                scale=render_scale,
+                scale_modify=(render_scale, render_scale),
+                cuda_rendering=True,
+                if_dmax=True,
             )
 
         out_imgs = []
-        for i in range(xy.shape[0]):
+        for i in range(gs_parameters.shape[0]):
             out_imgs.append(
-                self.render_inner(
-                    img_h=img_h,
-                    img_w=img_w,
-                    tile_bounds=tile_bounds,
-                    xy=xy[i],
-                    inverse_scale=inverse_scale[i],
-                    rot=rot[i],
-                    feat=feat[i],
-                    upsample_ratio=upsample_ratio,
+                generate_2D_gaussian_splatting_step(
+                    sr_size=(img_h, img_w),
+                    gs_parameters=gs_parameters[i].float(),
+                    scale=render_scale,
+                    scale_modify=(render_scale, render_scale),
+                    cuda_rendering=True,
+                    if_dmax=True,
                 )
             )
 
@@ -245,14 +161,15 @@ class GaussianAutoEncoder(nn.Module):
             c=self.gaussian_channels,
         )
 
-        xy = torch.sigmoid(self.xy_proj(gaussian_features)) * self.img_size
+        sigma = self.sigma_proj(gaussian_features)
+        rho = self.rho_proj(gaussian_features)
+        alpha = self.alpha_proj(gaussian_features)
+        feat = self.feat_proj(gaussian_features)
+        xy = torch.sigmoid(self.xy_proj(gaussian_features))
 
-        inverse_scale = F.softplus(self.inverse_scale_proj(gaussian_features)) + 1e-4
+        gs_parameters = torch.cat([sigma, rho, alpha, feat, xy], dim=-1)
 
-        rot = torch.tanh(self.rot_proj(gaussian_features)) * 3.1415926
-        feat = torch.sigmoid(self.feat_proj(gaussian_features))
-
-        recon_imgs = self.render(xy=xy, inverse_scale=inverse_scale, rot=rot, feat=feat)
+        recon_imgs = self.render(gs_parameters=gs_parameters)
 
         return recon_imgs
 

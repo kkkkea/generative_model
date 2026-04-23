@@ -13,6 +13,40 @@ from pytorch_msssim import ssim
 from utils.gaussian_splatting import generate_2D_gaussian_splatting_step
 
 
+class FactorizedGaussianProjector(nn.Module):
+    def __init__(
+        self,
+        input_dim: int,
+        num_gaussian_per_patch: int,
+        gaussian_channel: int,
+        rank: int,
+    ):
+        super().__init__()
+        self.num_gaussian_per_patch = num_gaussian_per_patch
+        self.gaussian_channel = gaussian_channel
+
+        self.to_gaussian_latent = nn.Linear(
+            input_dim, num_gaussian_per_patch * rank
+        )
+        self.act = nn.ReLU()
+        self.to_gaussian_channel = nn.Linear(rank, gaussian_channel)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = self.to_gaussian_latent(x)
+        x = self.act(x)
+        x = rearrange(
+            x,
+            "b l (n r) -> b l n r",
+            n=self.num_gaussian_per_patch,
+        )
+        x = self.to_gaussian_channel(x)
+        return rearrange(
+            x,
+            "b l n c -> b l (n c)",
+            c=self.gaussian_channel,
+        )
+
+
 class GaussianAutoEncoder(nn.Module):
     def __init__(
         self,
@@ -22,6 +56,7 @@ class GaussianAutoEncoder(nn.Module):
         in_channels: int = 3,
         gaussian_channel: int = 192,
         num_gaussian_per_patch: int = 256,
+        gaussian_proj_rank: int = 64,
         l1_loss_ratio: float = 1.0,
         ssim_loss_ratio: float = 0.1,
     ):
@@ -32,6 +67,7 @@ class GaussianAutoEncoder(nn.Module):
         self.gaussian_channel = gaussian_channel
         self.num_gaussian_per_patch = num_gaussian_per_patch
         self.num_gaussian_sqrt = int(math.sqrt(num_gaussian_per_patch))
+        self.gaussian_proj_rank = gaussian_proj_rank
         self.img_size = img_size
         self.in_channels = in_channels
 
@@ -52,21 +88,11 @@ class GaussianAutoEncoder(nn.Module):
 
         self.gaussian_norm = nn.RMSNorm(gaussian_dim)
 
-        mlp_ratio_sqrt = int(
-            math.sqrt(
-                self.gaussian_channel * self.num_gaussian_per_patch / gaussian_dim
-            )
-        )
-        self.gaussian_proj = nn.Sequential(
-            nn.Linear(
-                gaussian_dim,
-                gaussian_dim * mlp_ratio_sqrt,
-            ),
-            nn.ReLU(),
-            nn.Linear(
-                gaussian_dim * mlp_ratio_sqrt,
-                self.gaussian_channel * self.num_gaussian_per_patch,
-            ),
+        self.gaussian_proj = FactorizedGaussianProjector(
+            input_dim=gaussian_dim,
+            num_gaussian_per_patch=self.num_gaussian_per_patch,
+            gaussian_channel=self.gaussian_channel,
+            rank=self.gaussian_proj_rank,
         )
 
         # GS sigma_x, sigma_y
@@ -306,6 +332,7 @@ def GaussianAE_B(
     in_channels: int = 3,
     gaussian_channel: int = 192,
     num_gaussian_per_patch: int = 256,
+    gaussian_proj_rank: int = 64,
     l1_loss_ratio: float = 1.0,
     ssim_loss_ratio: float = 0.1,
     **kwargs,
@@ -316,6 +343,7 @@ def GaussianAE_B(
         in_channels=in_channels,
         gaussian_channel=gaussian_channel,
         num_gaussian_per_patch=num_gaussian_per_patch,
+        gaussian_proj_rank=gaussian_proj_rank,
         l1_loss_ratio=l1_loss_ratio,
         ssim_loss_ratio=ssim_loss_ratio,
         transformer_config=TransformerArgs(n_layer=12, n_head=12, dim=768, **kwargs),

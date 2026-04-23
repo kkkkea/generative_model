@@ -53,6 +53,7 @@ model:
       in_channels: 3
       gaussian_channel: 192
       num_gaussian_per_patch: 256
+      gaussian_proj_rank: 64
       l1_loss_ratio: 1.0
       ssim_loss_ratio: 0
   ema_tracker:

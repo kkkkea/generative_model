@@ -369,3 +369,65 @@ class Decoder_Decoder(nn.Module):
             q = layer(x=q, k=k, v=v, freqs_cis=freqs_cis)
 
         return q
+
+
+class Cross_Self_Decoder(nn.Module):
+    def __init__(self, config: TransformerArgs):
+        super().__init__()
+        self.config = config
+        n_layer = config.n_layer
+
+        self.self_dec = nn.ModuleList(
+            [SelfDecoder(config) for _ in range(n_layer // 2)]
+        )
+        self.cross_dec = nn.ModuleList(
+            [CrossDecoder(config) for _ in range(n_layer // 2)]
+        )
+
+        self.norm = nn.RMSNorm(config.dim, eps=config.norm_eps)
+        self.to_k = nn.Linear(config.dim, config.dim, bias=False)
+        self.to_v = nn.Linear(config.dim, config.dim, bias=False)
+
+        self.kv_cache = False
+        self.k_cache = None
+        self.v_cache = None
+
+    def reset_kv_cache(self):
+        self.k_cache = None
+        self.v_cache = None
+
+    def update_kv_cache(self, k: torch.Tensor, v: torch.Tensor, head_first=False):
+        t_dim = 2 if head_first else 1
+
+        if self.k_cache is None and self.v_cache is None:
+            k_cache = k
+            v_cache = v
+        else:
+            k_cache = torch.cat([self.k_cache, k], dim=t_dim)
+            v_cache = torch.cat([self.v_cache, v], dim=t_dim)
+
+        self.k_cache = k_cache
+        self.v_cache = v_cache
+
+        return k_cache, v_cache
+
+    def forward(self, x: torch.Tensor, q: torch.Tensor, freqs_cis: torch.Tensor = None):
+        x_norm = self.norm(x)
+        k = self.to_k(x_norm)
+        v = self.to_v(x_norm)
+
+        k, v = map(
+            lambda t: rearrange(t, "b n (h d) -> b n h d", h=self.config.n_head), (k, v)
+        )
+        k = apply_rotary_emb(k, freqs_cis[:, : k.shape[1], ...])
+
+        if self.kv_cache:
+            k, v = self.update_kv_cache(k, v)
+
+        for layer in self.cross_dec:
+            q = layer(x=q, k=k, v=v, freqs_cis=freqs_cis)
+
+        for layer in self.self_dec:
+            q = layer(x=q, freqs_cis=freqs_cis)
+
+        return q

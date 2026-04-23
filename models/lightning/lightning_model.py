@@ -34,6 +34,9 @@ class GaussianAEModel(pl.LightningModule):
         ema_tracker: SimpleEMA = None,
         optimizer: OptimizerCallable = None,
         lr_scheduler: LRSchedulerCallable = None,
+        lr_scheduler_interval: str = "step",
+        lr_scheduler_frequency: int = 1,
+        lr_scheduler_monitor: Optional[str] = None,
         override_lr_on_resume: Optional[float] = None,
         override_ema_decay_on_resume: Optional[float] = None,
         encoder_config_path: str = "facebook/dinov2-with-registers-base",
@@ -52,6 +55,9 @@ class GaussianAEModel(pl.LightningModule):
         self.ema_tracker = ema_tracker
         self.optimizer = optimizer
         self.lr_scheduler = lr_scheduler
+        self.lr_scheduler_interval = lr_scheduler_interval
+        self.lr_scheduler_frequency = lr_scheduler_frequency
+        self.lr_scheduler_monitor = lr_scheduler_monitor
         self.override_lr_on_resume = override_lr_on_resume
         self.override_ema_decay_on_resume = override_ema_decay_on_resume
 
@@ -89,9 +95,16 @@ class GaussianAEModel(pl.LightningModule):
         optimizer: torch.optim.Optimizer = self.optimizer(param_groups)
         if self.lr_scheduler is None:
             return dict(optimizer=optimizer)
-        else:
-            lr_scheduler = self.lr_scheduler(optimizer)
-            return dict(optimizer=optimizer, lr_scheduler=lr_scheduler)
+
+        lr_scheduler = self.lr_scheduler(optimizer)
+        scheduler_config = {
+            "scheduler": lr_scheduler,
+            "interval": self.lr_scheduler_interval,
+            "frequency": self.lr_scheduler_frequency,
+        }
+        if self.lr_scheduler_monitor is not None:
+            scheduler_config["monitor"] = self.lr_scheduler_monitor
+        return dict(optimizer=optimizer, lr_scheduler=scheduler_config)
 
     def on_validation_start(self) -> None:
         self.ema_ae.to(torch.float32)
@@ -193,31 +206,27 @@ class GaussianAEModel(pl.LightningModule):
 
     def validation_step(self, batch, batch_idx):
         recon_imgs, gt_imgs = self.predict_step(batch, batch_idx)
-        if (
-                self.enable_log_images
-                and batch_idx == 0
-                and self.trainer.is_global_zero
-            ):
-                num_imgs = min(self.num_val_log_images, gt_imgs.shape[0])
+        if self.enable_log_images and batch_idx == 0 and self.trainer.is_global_zero:
+            num_imgs = min(self.num_val_log_images, gt_imgs.shape[0])
 
-                vis = torch.stack(
-                    [
-                        img
-                        for pair in zip(gt_imgs[:num_imgs], recon_imgs[:num_imgs])
-                        for img in pair
-                    ],
-                    dim=0,
-                )
-                grid = make_grid(vis, nrow=2)
+            vis = torch.stack(
+                [
+                    img
+                    for pair in zip(gt_imgs[:num_imgs], recon_imgs[:num_imgs])
+                    for img in pair
+                ],
+                dim=0,
+            )
+            grid = make_grid(vis, nrow=2)
 
-                self.logger.experiment.log(
-                    {
-                        "val/reconstructions": wandb.Image(
-                            grid.permute(1, 2, 0).detach().cpu().numpy()
-                        ),
-                        "global_step": self.global_step,
-                    }
-                )
+            self.logger.experiment.log(
+                {
+                    "val/reconstructions": wandb.Image(
+                        grid.permute(1, 2, 0).detach().cpu().numpy()
+                    ),
+                    "global_step": self.global_step,
+                }
+            )
 
     def state_dict(self, *args, destination=None, prefix="", keep_vars=False):
         if destination is None:

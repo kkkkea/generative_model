@@ -14,7 +14,6 @@ class DIV2KDataset(Dataset):
         target_size: int = 224,
         val_limit: int = 32,
         transform: Optional[Callable] = None,
-        return_path: bool = False,
         extensions: Tuple[str, ...] = (".png", ".jpg", ".jpeg", ".bmp"),
     ):
         """
@@ -31,17 +30,24 @@ class DIV2KDataset(Dataset):
         self.root = Path(root)
         self.split = split
         self.transform = transform
-        self.return_path = return_path
         self.extensions = tuple(e.lower() for e in extensions)
 
         if self.transform is None:
-            self.transform = transforms.Compose(
-                [
-                    transforms.RandomCrop((target_size, target_size)),
-                    transforms.RandomHorizontalFlip(),
-                    transforms.ToTensor(),
-                ]
-            )
+            if split == "train":
+                self.transform = transforms.Compose(
+                    [
+                        transforms.RandomCrop((target_size, target_size)),
+                        transforms.RandomHorizontalFlip(),
+                        transforms.ToTensor(),
+                    ]
+                )
+            else:
+                self.transform = transforms.Compose(
+                    [
+                        transforms.CenterCrop((target_size, target_size)),
+                        transforms.ToTensor(),
+                    ]
+                )
 
         if split == "train":
             self.img_dir = self.root / "DIV2K_train_HR"
@@ -76,11 +82,5 @@ class DIV2KDataset(Dataset):
 
         if self.transform is not None:
             image = self.transform(image)
-
-        if self.return_path:
-            return {
-                "image": image,
-                "path": str(img_path),
-            }
 
         return image, None, None

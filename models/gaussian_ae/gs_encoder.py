@@ -114,10 +114,81 @@ class GaussianAutoEncoder(nn.Module):
             nn.Linear(self.gaussian_channel * 4, 2),
         )
 
-        self.freq_cis = precompute_freqs_cis_2d(
-            grid_size=self.grid_size,
-            n_elem=transformer_config.dim // transformer_config.n_head,
-            base=transformer_config.rope_base,
+        self.register_buffer(
+            "freq_cis",
+            precompute_freqs_cis_2d(
+                grid_size=self.grid_size,
+                n_elem=transformer_config.dim // transformer_config.n_head,
+                base=transformer_config.rope_base,
+            ),
+        )
+
+    @staticmethod
+    def _format_param_count(num_params: int) -> str:
+        if num_params >= 1_000_000_000:
+            return f"{num_params / 1_000_000_000:.2f}B"
+        if num_params >= 1_000_000:
+            return f"{num_params / 1_000_000:.2f}M"
+        if num_params >= 1_000:
+            return f"{num_params / 1_000:.2f}K"
+        return str(num_params)
+
+    def print_parameter_summary(self):
+        lines = []
+        total_params = 0
+        trainable_params = 0
+
+        gaussian_embedding_params = self.gaussian_embedding.numel()
+        total_params += gaussian_embedding_params
+        trainable_params += gaussian_embedding_params
+        lines.append(
+            (
+                "gaussian_embedding",
+                gaussian_embedding_params,
+                gaussian_embedding_params,
+            )
+        )
+
+        for module_name, module in self.named_children():
+            if module_name == "gaussian_embedding":
+                continue
+
+            module_total = sum(param.numel() for param in module.parameters())
+            module_trainable = sum(
+                param.numel() for param in module.parameters() if param.requires_grad
+            )
+            total_params += module_total
+            trainable_params += module_trainable
+            lines.append((module_name, module_total, module_trainable))
+
+        name_width = max(len("module"), max(len(name) for name, _, _ in lines))
+        total_width = max(
+            len("total params"),
+            max(len(self._format_param_count(total)) for _, total, _ in lines),
+        )
+        trainable_width = max(
+            len("trainable"),
+            max(len(self._format_param_count(trainable)) for _, _, trainable in lines),
+        )
+
+        header = (
+            f"{'module':<{name_width}}  "
+            f"{'total params':>{total_width}}  "
+            f"{'trainable':>{trainable_width}}"
+        )
+        print(header)
+        print("-" * len(header))
+        for name, total, trainable in lines:
+            print(
+                f"{name:<{name_width}}  "
+                f"{self._format_param_count(total):>{total_width}}  "
+                f"{self._format_param_count(trainable):>{trainable_width}}"
+            )
+        print("-" * len(header))
+        print(
+            f"{'total':<{name_width}}  "
+            f"{self._format_param_count(total_params):>{total_width}}  "
+            f"{self._format_param_count(trainable_params):>{trainable_width}}"
         )
 
     def calc_loss(self, imgs: torch.Tensor, gt_imgs: torch.Tensor):
@@ -182,7 +253,7 @@ class GaussianAutoEncoder(nn.Module):
 
     def forward_shared(self, img_features: torch.Tensor):
         b, seq_len, h = img_features.shape
-        freq_cis = self.freq_cis.unsqueeze(0).repeat(b, 1, 1, 1).to(img_features.device)
+        freq_cis = self.freq_cis.unsqueeze(0).expand(b, -1, -1, -1)
         queries = (
             self.gaussian_embedding.unsqueeze(0).repeat(b, 1, 1).to(img_features.device)
         )
@@ -213,7 +284,7 @@ class GaussianAutoEncoder(nn.Module):
         reference_offset = self.get_N_reference_points(
             gaussian_h, gaussian_w, device=mean.device
         )
-        pos = reference_offset + mean
+        pos = mean + reference_offset.reshape(1, -1, 2)
 
         gs_params = torch.cat([sigma, rho, alpha, rgb, pos], dim=-1)
 

@@ -1,12 +1,12 @@
 seed_everything: true
 per_run_seed: true
 tags:
-  exp: &exp gaussian_encoder_b
+  exp: &exp gs_encoder_05_01
 torch_hub_dir: null
 huggingface_cache_dir: null
 auto_resume: true
 trainer:
-  default_root_dir: /free/data/gsae/train_logs/
+  default_root_dir: /free/data/gsae/
   accelerator: gpu
   strategy: ddp
   devices: auto
@@ -21,41 +21,43 @@ trainer:
         name: *exp
   num_sanity_val_steps: 0
   max_steps: 600000
-  val_check_interval: 50
+  val_check_interval: 5000
   check_val_every_n_epoch: null
-  log_every_n_steps: 50
+  log_every_n_steps: 100
   deterministic: null
   inference_mode: true
   use_distributed_sampler: false
   callbacks:
     - class_path: utils.util.CheckpointHook
       init_args:
-        every_n_train_steps: 500
+        every_n_train_steps: 5000
         save_top_k: -1
         save_last: true
 
 model:
-  vision_encoder:
-    class_path: models.encoder.dinov2.Dinov2withNorm
-    init_args:
-      dinov2_path: facebook/dinov2-with-registers-base
   ae:
     class_path: models.gaussian_ae.gs_encoder.GaussianAutoEncoder
     init_args:
-      transformer_config:
-        class_path: models.transformer.transformer.TransformerArgs
-        init_args:
-          dim: 768
-          n_layer: 16
-          n_head: 12
-      img_size: 224
-      patch_size: 14
-      in_channels: 3
-      gaussian_channel: 192
-      num_gaussian_per_patch: 256
-      gaussian_proj_rank: 64
+      encoder_path: /home/kkkkea/.cache/dinov3
+      encoder_type: dinov3
+      img_size: 256
+      num_gaussian: 16384
+      group_size: 64
+      init_random_ratio: 0.3
+      init_scale: 1.0
+      max_xy_shift: 4.0
+      inv_scale_delta_range: 1
+      rotation_delta_range: 1.0
+      color_delta_scale: 1.0
       l1_loss_ratio: 1.0
-      ssim_loss_ratio: 0
+      ssim_loss_ratio: 0.1
+      n_head: 32
+      ffn_dropout_p: 0.1
+      attn_dropout_p: 0.0
+      resid_dropout_p: 0.1
+      norm_eps: 1e-5
+      cross_layer: 6
+      self_layer: 8
   ema_tracker:
     class_path: utils.util.SimpleEMA
     init_args:
@@ -68,8 +70,11 @@ model:
   lr_scheduler:
     class_path: torch.optim.lr_scheduler.CosineAnnealingLR
     init_args:
-      T_max: 600000
+      T_max: 590000
       eta_min: 1e-5
+  upsample_ratio: 8.0
+  warmup_steps: 10000
+  warmup_start_factor: 0.001
   lr_scheduler_interval: step
   lr_scheduler_frequency: 1
   enable_profiling: true
@@ -80,21 +85,28 @@ model:
   enable_compile: false
 data:
   train_dataset:
-    class_path: dataset.div2k.DIV2KDataset
+    class_path: dataset.aesthetic4k.Aesthetic4KDataset
     init_args:
-      root: /free/data/dataset/div2k
       split: train
+      lr_size: 256
+      downsample_ratio: 8
   eval_dataset:
-    class_path: dataset.div2k.DIV2KDataset
+    class_path: dataset.aesthetic4k.Aesthetic4KDataset
     init_args:
-      root: /free/data/dataset/div2k
-      split: valid
+      split: train
+      lr_size: 256
+      downsample_ratio: 8
+      val_limit: 32
   pred_dataset:
-    class_path: dataset.div2k.DIV2KDataset
+    class_path: dataset.aesthetic4k.Aesthetic4KDataset
     init_args:
-      root: /free/data/dataset/div2k
-      split: valid
-  train_batch_size: 64
-  train_num_workers: 4
-  pred_batch_size: 32
+      split: train
+      lr_size: 256
+      downsample_ratio: 8
+      val_limit: 32
+  train_batch_size: 16
+  train_num_workers: 8
+  eval_batch_size: 4
+  eval_num_workers: 1
+  pred_batch_size: 4
   pred_num_workers: 1

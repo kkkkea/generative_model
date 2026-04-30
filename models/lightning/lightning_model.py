@@ -5,13 +5,13 @@ import torch.nn as nn
 import lightning.pytorch as pl
 import copy
 
-from transformers import AutoImageProcessor
 from typing import Callable, Iterable, Optional, Union, Sequence
 from lightning.pytorch.utilities.types import OptimizerLRScheduler
 from lightning.pytorch.callbacks import Callback
-from torch.optim.lr_scheduler import LRScheduler
+from torch.optim.lr_scheduler import LinearLR, LRScheduler, SequentialLR
 from torch.optim import Optimizer
 from torchvision.utils import make_grid
+from models.gaussian_ae.gs_encoder import calc_loss
 from utils.util import (
     SimpleEMA,
     copy_params,
@@ -29,17 +29,18 @@ LRSchedulerCallable = Callable[[Optimizer], LRScheduler]
 class GaussianAEModel(pl.LightningModule):
     def __init__(
         self,
-        vision_encoder: nn.Module,
         ae: nn.Module,
         ema_tracker: SimpleEMA = None,
         optimizer: OptimizerCallable = None,
+        upsample_ratio: int = 8.0,
         lr_scheduler: LRSchedulerCallable = None,
+        warmup_steps: int = 2000,
+        warmup_start_factor: float = 1e-3,
         lr_scheduler_interval: str = "step",
         lr_scheduler_frequency: int = 1,
         lr_scheduler_monitor: Optional[str] = None,
         override_lr_on_resume: Optional[float] = None,
         override_ema_decay_on_resume: Optional[float] = None,
-        encoder_config_path: str = "facebook/dinov2-with-registers-base",
         eval_original_model: bool = False,
         enable_profiling: bool = True,
         profiling_print_freq: int = 10,
@@ -49,12 +50,14 @@ class GaussianAEModel(pl.LightningModule):
         enable_compile: bool = False,
     ):
         super().__init__()
-        self.vision_encoder = vision_encoder
         self.ae = ae
         self.ema_ae = copy.deepcopy(self.ae)
         self.ema_tracker = ema_tracker
         self.optimizer = optimizer
+        self.upsample_ratio = upsample_ratio
         self.lr_scheduler = lr_scheduler
+        self.warmup_steps = warmup_steps
+        self.warmup_start_factor = warmup_start_factor
         self.lr_scheduler_interval = lr_scheduler_interval
         self.lr_scheduler_frequency = lr_scheduler_frequency
         self.lr_scheduler_monitor = lr_scheduler_monitor
@@ -72,15 +75,10 @@ class GaussianAEModel(pl.LightningModule):
         self.num_val_log_images = num_val_log_images
         self.enable_compile = enable_compile
 
-        proc = AutoImageProcessor.from_pretrained(encoder_config_path)
-        self.encoder_mean = torch.tensor(proc.image_mean).view(1, 3, 1, 1)
-        self.encoder_std = torch.tensor(proc.image_std).view(1, 3, 1, 1)
-
     def configure_model(self) -> None:
         copy_params(self.ae, self.ema_ae)
 
         no_grad(self.ema_ae)
-        no_grad(self.vision_encoder)
 
         if self.enable_compile:
             self.ae.compile()
@@ -93,10 +91,28 @@ class GaussianAEModel(pl.LightningModule):
         params_ae = filter_nograd_tensors(self.ae.parameters())
         param_groups = [{"params": params_ae}]
         optimizer: torch.optim.Optimizer = self.optimizer(param_groups)
-        if self.lr_scheduler is None:
+        if self.lr_scheduler is None and self.warmup_steps <= 0:
             return dict(optimizer=optimizer)
 
-        lr_scheduler = self.lr_scheduler(optimizer)
+        lr_scheduler = (
+            self.lr_scheduler(optimizer) if self.lr_scheduler is not None else None
+        )
+        if self.warmup_steps > 0:
+            warmup_scheduler = LinearLR(
+                optimizer,
+                start_factor=self.warmup_start_factor,
+                end_factor=1.0,
+                total_iters=self.warmup_steps,
+            )
+            if lr_scheduler is None:
+                lr_scheduler = warmup_scheduler
+            else:
+                lr_scheduler = SequentialLR(
+                    optimizer,
+                    schedulers=[warmup_scheduler, lr_scheduler],
+                    milestones=[self.warmup_steps],
+                )
+
         scheduler_config = {
             "scheduler": lr_scheduler,
             "interval": self.lr_scheduler_interval,
@@ -114,7 +130,8 @@ class GaussianAEModel(pl.LightningModule):
 
     def on_train_start(self) -> None:
         self.ema_ae.to(torch.float32)
-        self.ema_tracker.setup_models(net=self.ae, ema_net=self.ema_ae)
+        if self.ema_tracker is not None:
+            self.ema_tracker.setup_models(net=self.ae, ema_net=self.ema_ae)
 
         resumed = (getattr(self, "global_step", 0) or 0) > 0 or getattr(
             self.trainer, "ckpt_path", None
@@ -159,22 +176,21 @@ class GaussianAEModel(pl.LightningModule):
             self.profiler.start_step()
 
         x, y, meta = batch
-        x_normalize = (x - self.encoder_mean.to(x.device)) / self.encoder_std.to(
-            x.device
-        )
-
-        with torch.no_grad():
-            if self.profiler:
-                with self.profiler.profile("data/encode_img"):
-                    img_features = self.vision_encoder(x_normalize)
-            else:
-                img_features = self.vision_encoder(x_normalize)
+        upsample_ratio = self.upsample_ratio
 
         if self.profiler:
             with self.profiler.profile("training/ae_forward"):
-                loss = self.ae(x, img_features)
+                loss = self.ae(
+                    x,
+                    gt_pixels=y,
+                    upsample_ratio=upsample_ratio,
+                )
         else:
-            loss = self.ae(x, img_features)
+            loss = self.ae(
+                x,
+                gt_pixels=y,
+                upsample_ratio=upsample_ratio,
+            )
 
         self.log_dict(loss, prog_bar=True, on_step=True, sync_dist=False)
 
@@ -189,26 +205,36 @@ class GaussianAEModel(pl.LightningModule):
         return loss["loss"]
 
     def predict_step(self, batch, batch_idx):
-        x, _, _ = batch
-        x_normalize = (x - self.encoder_mean.to(x.device)) / self.encoder_std.to(
-            x.device
-        )
+        x, y, _ = batch
+        upsample_ratio = self.upsample_ratio
 
         with torch.no_grad():
-            img_features = self.vision_encoder(x_normalize)
-
             if self.eval_original_model:
-                recon_imgs = self.ae.forward_shared(img_features)
+                recon_imgs = self.ae.forward_inference(x, upsample_ratio=upsample_ratio)
             else:
-                recon_imgs = self.ema_ae.forward_shared(img_features)
+                recon_imgs = self.ema_ae.forward_inference(
+                    x, upsample_ratio=upsample_ratio
+                )
 
-        return recon_imgs, x
+        return recon_imgs, y
 
     def validation_step(self, batch, batch_idx):
         recon_imgs, gt_imgs = self.predict_step(batch, batch_idx)
+        l1, psnr, ssim = calc_loss(recon_imgs, gt_imgs)
+        self.log_dict(
+            {
+                "val/l1": l1,
+                "val/psnr": psnr,
+                "val/ssim": ssim,
+            },
+            prog_bar=True,
+            on_step=False,
+            on_epoch=True,
+            sync_dist=True,
+        )
+
         if self.enable_log_images and batch_idx == 0 and self.trainer.is_global_zero:
             num_imgs = min(self.num_val_log_images, gt_imgs.shape[0])
-
             vis = torch.stack(
                 [
                     img
@@ -217,7 +243,7 @@ class GaussianAEModel(pl.LightningModule):
                 ],
                 dim=0,
             )
-            grid = make_grid(vis, nrow=2)
+            grid = make_grid(vis.clamp(0.0, 1.0), nrow=2)
 
             self.logger.experiment.log(
                 {

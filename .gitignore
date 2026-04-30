@@ -5,4 +5,5 @@
 **/**.log
 wandb/
 
+tests/
 test.py

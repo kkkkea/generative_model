@@ -8,7 +8,6 @@ from torch.utils.data import DataLoader, Dataset, IterableDataset
 
 
 def mirco_batch_collate_fn(batch):
-    batch = copy.deepcopy(batch)
     new_batch = []
     for micro_batch in batch:
         new_batch.extend(micro_batch)
@@ -25,11 +24,12 @@ def mirco_batch_collate_fn(batch):
             except Exception:
                 pass
     x = torch.stack(x, dim=0)
+    if len(y) > 0 and isinstance(y[0], torch.Tensor):
+        y = torch.stack(y, dim=0)
     return x, y, stacked_metadata
 
 
 def collate_fn(batch):
-    batch = copy.deepcopy(batch)
     x, y, metadata = list(zip(*batch))
     stacked_metadata = None
     if len(metadata) > 0 and metadata[0] is not None:
@@ -43,13 +43,16 @@ def collate_fn(batch):
             except Exception:
                 pass
     x = torch.stack(x, dim=0)
+    if len(y) > 0 and isinstance(y[0], torch.Tensor):
+        y = torch.stack(y, dim=0)
     return x, y, stacked_metadata
 
 
 def eval_collate_fn(batch):
-    batch = copy.deepcopy(batch)
     x, y, metadata = list(zip(*batch))
     x = torch.stack(x, dim=0)
+    if len(y) > 0 and isinstance(y[0], torch.Tensor):
+        y = torch.stack(y, dim=0)
     return x, y, metadata
 
 

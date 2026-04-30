@@ -357,6 +357,11 @@ def gaussiansplatting_render(
     BLOCK_W: int = FIXED_BLOCK_W,
     topk_norm: bool = True,
 ) -> Tensor:
+    means2d = means2d.float()
+    scales2d = scales2d.float()
+    rotation = rotation.float()
+    colors = colors.float() / 255.0 if colors.dtype == torch.uint8 else colors.float()
+
     h, w = image_size[:2]
     tile_bounds = ((w + BLOCK_W - 1) // BLOCK_W, (h + BLOCK_H - 1) // BLOCK_H, 1)
     xys, radii, conics, num_tiles_hit = project_gaussians_2d_scale_rot(

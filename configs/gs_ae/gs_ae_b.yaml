@@ -73,7 +73,7 @@ model:
       T_max: 590000
       eta_min: 1e-5
   upsample_ratio: 8.0
-  warmup_steps: 10000
+  warmup_steps: 2000
   warmup_start_factor: 0.001
   lr_scheduler_interval: step
   lr_scheduler_frequency: 1

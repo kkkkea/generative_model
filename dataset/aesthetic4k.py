@@ -1,9 +1,11 @@
 from typing import Callable, Optional
+from io import BytesIO
 import warnings
 
 from torch.utils.data.dataset import Dataset
+from datasets import Image as HFImage
 from datasets import load_dataset, load_from_disk
-from PIL import Image
+from PIL import Image as PILImage
 from torchvision import transforms
 from torchvision.transforms import InterpolationMode
 
@@ -18,7 +20,7 @@ class Aesthetic4KDataset(Dataset):
         transform: Optional[Callable] = None,
         val_limit: Optional[int] = None,
         skip_small_images: bool = True,
-        max_image_pixels: Optional[int] = Image.MAX_IMAGE_PIXELS,
+        max_image_pixels: Optional[int] = PILImage.MAX_IMAGE_PIXELS,
     ):
         self.split = split
         self.lr_size = lr_size
@@ -29,6 +31,8 @@ class Aesthetic4KDataset(Dataset):
             self.ds = load_from_disk(local_path)[split]
         else:
             self.ds = load_dataset("zhang0jhon/Aesthetic-4K", split=split)
+
+        self.ds = self.ds.cast_column("image", HFImage(decode=False))
 
         if skip_small_images or max_image_pixels is not None:
             self.ds = self.ds.filter(
@@ -61,10 +65,9 @@ class Aesthetic4KDataset(Dataset):
     def _is_valid_image_size(self, item) -> bool:
         try:
             with warnings.catch_warnings():
-                warnings.simplefilter("ignore", Image.DecompressionBombWarning)
-                image = item["image"]
-                width, height = image.size
-        except Image.DecompressionBombError:
+                warnings.simplefilter("ignore", PILImage.DecompressionBombWarning)
+                width, height = self._get_image_size(item["image"])
+        except (PILImage.DecompressionBombError, OSError, ValueError):
             return False
 
         if width < self.gt_size or height < self.gt_size:
@@ -73,12 +76,29 @@ class Aesthetic4KDataset(Dataset):
             return False
         return True
 
+    @staticmethod
+    def _get_image_size(image_item) -> tuple[int, int]:
+        image = Aesthetic4KDataset._open_image(image_item)
+        try:
+            return image.size
+        finally:
+            image.close()
+
+    @staticmethod
+    def _open_image(image_item):
+        if isinstance(image_item, dict):
+            if image_item.get("bytes") is not None:
+                return PILImage.open(BytesIO(image_item["bytes"]))
+            if image_item.get("path") is not None:
+                return PILImage.open(image_item["path"])
+        return image_item
+
     def __len__(self):
         return len(self.ds)
 
     def __getitem__(self, idx):
         item = self.ds[idx]
-        img = item["image"].convert("RGB")
+        img = self._open_image(item["image"]).convert("RGB")
 
         gt = self.transform(img) if self.transform is not None else img
         lr = self.downsample(gt)

@@ -2,13 +2,13 @@ ninja_required_version = 1.3
 cxx = c++
 nvcc = /usr/local/cuda/bin/nvcc
 
-cflags = -DTORCH_EXTENSION_NAME=gscuda_tiled -DTORCH_API_INCLUDE_EXTENSION_H -I/home/kkkkea/code/paper_code/generative_model/utils/gs_cuda_tiled/csrc -I/home/kkkkea/code/paper_code/generative_model/utils/gs_cuda_tiled/csrc/third_party/glm -isystem /home/kkkkea/miniconda3/lib/python3.13/site-packages/torch/include -isystem /home/kkkkea/miniconda3/lib/python3.13/site-packages/torch/include/torch/csrc/api/include -isystem /usr/local/cuda/include -isystem /home/kkkkea/miniconda3/include/python3.13 -fPIC -std=c++17 -O3
+cflags = -DTORCH_EXTENSION_NAME=gscuda_tiled -DTORCH_API_INCLUDE_EXTENSION_H -DPYBIND11_COMPILER_TYPE=\"_gcc\" -DPYBIND11_STDLIB=\"_libstdcpp\" -DPYBIND11_BUILD_ABI=\"_cxxabi1018\" -I/root/code/generative_model/utils/gs_cuda_tiled/csrc -I/root/code/generative_model/utils/gs_cuda_tiled/csrc/third_party/glm -isystem /root/miniconda3/lib/python3.12/site-packages/torch/include -isystem /root/miniconda3/lib/python3.12/site-packages/torch/include/torch/csrc/api/include -isystem /usr/local/cuda/include -isystem /root/miniconda3/include/python3.12 -fPIC -std=c++17 -O3
 post_cflags = 
-cuda_cflags = -DTORCH_EXTENSION_NAME=gscuda_tiled -DTORCH_API_INCLUDE_EXTENSION_H -I/home/kkkkea/code/paper_code/generative_model/utils/gs_cuda_tiled/csrc -I/home/kkkkea/code/paper_code/generative_model/utils/gs_cuda_tiled/csrc/third_party/glm -isystem /home/kkkkea/miniconda3/lib/python3.13/site-packages/torch/include -isystem /home/kkkkea/miniconda3/lib/python3.13/site-packages/torch/include/torch/csrc/api/include -isystem /usr/local/cuda/include -isystem /home/kkkkea/miniconda3/include/python3.13 -D__CUDA_NO_HALF_OPERATORS__ -D__CUDA_NO_HALF_CONVERSIONS__ -D__CUDA_NO_BFLOAT16_CONVERSIONS__ -D__CUDA_NO_HALF2_OPERATORS__ --expt-relaxed-constexpr -gencode=arch=compute_120,code=sm_120 --compiler-options '-fPIC' -O3 --use_fast_math --expt-relaxed-constexpr -std=c++17
+cuda_cflags = -DTORCH_EXTENSION_NAME=gscuda_tiled -DTORCH_API_INCLUDE_EXTENSION_H -DPYBIND11_COMPILER_TYPE=\"_gcc\" -DPYBIND11_STDLIB=\"_libstdcpp\" -DPYBIND11_BUILD_ABI=\"_cxxabi1018\" -I/root/code/generative_model/utils/gs_cuda_tiled/csrc -I/root/code/generative_model/utils/gs_cuda_tiled/csrc/third_party/glm -isystem /root/miniconda3/lib/python3.12/site-packages/torch/include -isystem /root/miniconda3/lib/python3.12/site-packages/torch/include/torch/csrc/api/include -isystem /usr/local/cuda/include -isystem /root/miniconda3/include/python3.12 -D__CUDA_NO_HALF_OPERATORS__ -D__CUDA_NO_HALF_CONVERSIONS__ -D__CUDA_NO_BFLOAT16_CONVERSIONS__ -D__CUDA_NO_HALF2_OPERATORS__ --expt-relaxed-constexpr -gencode=arch=compute_80,code=sm_80 --compiler-options '-fPIC' -O3 --use_fast_math --expt-relaxed-constexpr -std=c++17
 cuda_post_cflags = 
 cuda_dlink_post_cflags = 
 sycl_dlink_post_cflags = 
-ldflags = -shared -L/home/kkkkea/miniconda3/lib/python3.13/site-packages/torch/lib -lc10 -lc10_cuda -ltorch_cpu -ltorch_cuda -ltorch -ltorch_python -L/usr/local/cuda/lib64 -lcudart
+ldflags = -shared -L/root/miniconda3/lib/python3.12/site-packages/torch/lib -lc10 -lc10_cuda -ltorch_cpu -ltorch_cuda -ltorch -ltorch_python -L/usr/local/cuda/lib64 -lcudart
 
 rule compile
   command = $cxx -MMD -MF $out.d $cflags -c $in -o $out $post_cflags
@@ -18,7 +18,7 @@ rule compile
 rule cuda_compile
   depfile = $out.d
   deps = gcc
-  command = $nvcc -MD -MF $out.d $cuda_cflags -c $in -o $out $cuda_post_cflags
+  command = $nvcc --generate-dependencies-with-compile --dependency-output $out.d $cuda_cflags -c $in -o $out $cuda_post_cflags
 
 
 
@@ -27,17 +27,17 @@ rule cuda_compile
 rule link
   command = $cxx $in $ldflags -o $out
 
-build gswrapper.o: compile /home/kkkkea/code/paper_code/generative_model/utils/gs_cuda_tiled/gswrapper.cpp
-build forward.cuda.o: cuda_compile /home/kkkkea/code/paper_code/generative_model/utils/gs_cuda_tiled/csrc/forward.cu
-build bindings.cuda.o: cuda_compile /home/kkkkea/code/paper_code/generative_model/utils/gs_cuda_tiled/csrc/bindings.cu
-build backward2d.cuda.o: cuda_compile /home/kkkkea/code/paper_code/generative_model/utils/gs_cuda_tiled/csrc/backward2d.cu
-build backward.cuda.o: cuda_compile /home/kkkkea/code/paper_code/generative_model/utils/gs_cuda_tiled/csrc/backward.cu
-build foward2d.cuda.o: cuda_compile /home/kkkkea/code/paper_code/generative_model/utils/gs_cuda_tiled/csrc/foward2d.cu
+build gswrapper.o: compile /root/code/generative_model/utils/gs_cuda_tiled/gswrapper.cpp
+build backward.cuda.o: cuda_compile /root/code/generative_model/utils/gs_cuda_tiled/csrc/backward.cu
+build backward2d.cuda.o: cuda_compile /root/code/generative_model/utils/gs_cuda_tiled/csrc/backward2d.cu
+build bindings.cuda.o: cuda_compile /root/code/generative_model/utils/gs_cuda_tiled/csrc/bindings.cu
+build forward.cuda.o: cuda_compile /root/code/generative_model/utils/gs_cuda_tiled/csrc/forward.cu
+build foward2d.cuda.o: cuda_compile /root/code/generative_model/utils/gs_cuda_tiled/csrc/foward2d.cu
 
 
 
 
 
-build gscuda_tiled.so: link gswrapper.o forward.cuda.o bindings.cuda.o backward2d.cuda.o backward.cuda.o foward2d.cuda.o
+build gscuda_tiled.so: link gswrapper.o backward.cuda.o backward2d.cuda.o bindings.cuda.o forward.cuda.o foward2d.cuda.o
 
 default gscuda_tiled.so

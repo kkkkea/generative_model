@@ -32,7 +32,7 @@ class GaussianAEModel(pl.LightningModule):
         ae: nn.Module,
         ema_tracker: SimpleEMA = None,
         optimizer: OptimizerCallable = None,
-        upsample_ratio: int = 8.0,
+        upsample_ratio: float = 8.0,
         lr_scheduler: LRSchedulerCallable = None,
         warmup_steps: int = 2000,
         warmup_start_factor: float = 1e-3,

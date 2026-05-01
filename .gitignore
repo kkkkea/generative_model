@@ -7,3 +7,6 @@ wandb/
 
 tests/
 test.py
+config.yaml
+.vscode/
+**/build

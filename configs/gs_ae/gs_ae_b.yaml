@@ -6,7 +6,7 @@ torch_hub_dir: null
 huggingface_cache_dir: null
 auto_resume: true
 trainer:
-  default_root_dir: /free/data/gsae/
+  default_root_dir: /root/autodl-tmp/gs_encoder
   accelerator: gpu
   strategy: ddp
   devices: auto
@@ -38,7 +38,7 @@ model:
   ae:
     class_path: models.gaussian_ae.gs_encoder.GaussianAutoEncoder
     init_args:
-      encoder_path: /home/kkkkea/.cache/dinov3
+      encoder_path: /root/autodl-tmp/dinov3
       encoder_type: dinov3
       img_size: 256
       num_gaussian: 16384
@@ -90,12 +90,14 @@ data:
       split: train
       lr_size: 256
       downsample_ratio: 8
+      local_path: /root/autodl-tmp/my_aesthetic_data
   eval_dataset:
     class_path: dataset.aesthetic4k.Aesthetic4KDataset
     init_args:
       split: train
       lr_size: 256
       downsample_ratio: 8
+      local_path: /root/autodl-tmp/my_aesthetic_data
       val_limit: 32
   pred_dataset:
     class_path: dataset.aesthetic4k.Aesthetic4KDataset
@@ -103,6 +105,7 @@ data:
       split: train
       lr_size: 256
       downsample_ratio: 8
+      local_path: /root/autodl-tmp/my_aesthetic_data
       val_limit: 32
   train_batch_size: 16
   train_num_workers: 8

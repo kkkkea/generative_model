@@ -1,7 +1,7 @@
 from typing import Callable, Optional
 
 from torch.utils.data.dataset import Dataset
-from datasets import load_dataset
+from datasets import load_dataset, load_from_disk
 from torchvision import transforms
 from torchvision.transforms import InterpolationMode
 
@@ -12,11 +12,16 @@ class Aesthetic4KDataset(Dataset):
         split="train",
         lr_size: int = 256,
         downsample_ratio: int = 8,
+        local_path: Optional[str] = None,
         transform: Optional[Callable] = None,
         val_limit: Optional[int] = None,
     ):
         self.split = split
-        self.ds = load_dataset("zhang0jhon/Aesthetic-4K", split=split)
+        if local_path is not None:
+            self.ds = load_from_disk(local_path)[split]
+        else:
+            self.ds = load_dataset("zhang0jhon/Aesthetic-4K", split=split)
+            
         if val_limit is not None and split != "train":
             self.ds = self.ds.select(range(min(val_limit, len(self.ds))))
 

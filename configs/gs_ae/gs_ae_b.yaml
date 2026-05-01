@@ -43,7 +43,7 @@ model:
       img_size: 256
       num_gaussian: 16384
       group_size: 64
-      init_random_ratio: 0.3
+      init_random_ratio: 0.0
       init_scale: 1.0
       max_xy_shift: 4.0
       inv_scale_delta_range: 1

@@ -217,9 +217,8 @@ class GaussianAutoEncoder(nn.Module):
 
         return {"l1_loss": l1_loss, "ssim_loss": ssim_loss, "loss": loss}
 
-    def sample_pos(self, prob, init_random_ratio: float = 0.1, eps=1e-8):
-        B, N = prob.shape
-        device = prob.device
+    def sample_pos(self, prob):
+        _, N = prob.shape
 
         if self.num_gaussian > N:
             raise ValueError(
@@ -227,30 +226,8 @@ class GaussianAutoEncoder(nn.Module):
                 f"the number of pixels={N} when sampling without replacement."
             )
 
-        num_random = round(init_random_ratio * self.num_gaussian)
-        num_other = self.num_gaussian - num_random
-
         prob = prob.float()
-        prob = prob + eps
-
-        selected = []
-        for b in range(B):
-            selected_random = torch.randperm(N, device=device)[:num_random]
-
-            if num_other > 0:
-                prob_b = prob[b].clone()
-                prob_b[selected_random] = 0
-                prob_b = prob_b / prob_b.sum()
-                selected_other = torch.multinomial(
-                    prob_b,
-                    num_samples=num_other,
-                    replacement=False,
-                )
-            else:
-                selected_other = torch.empty(0, device=device, dtype=torch.long)
-            selected.append(torch.cat([selected_random, selected_other], dim=0))
-
-        return torch.stack(selected, dim=0)  # [B, num_gaussian]
+        return torch.topk(prob, k=self.num_gaussian, dim=1, largest=True).indices
 
     def get_init_gaussians(self, imgs: torch.Tensor):
         B, C, H, W = imgs.shape
@@ -266,7 +243,7 @@ class GaussianAutoEncoder(nn.Module):
 
         g_map, _ = compute_gmap_batch(images=imgs)
 
-        pos = self.sample_pos(prob=g_map, init_random_ratio=self.init_random_ratio)
+        pos = self.sample_pos(prob=g_map)
 
         pixel_xy = get_grid(h=H, w=W, device=imgs.device, dtype=imgs.dtype).reshape(
             -1, 2
